@@ -1,0 +1,5 @@
+python app_ui.py --name "Bilal's Laptop" --udp_port 45454 --tcp_port 45455 --broadcast_port 45456
+
+
+
+python app_ui.py --name "Office PC" --udp_port 45456 --tcp_port 45457 --broadcast_port 45454
