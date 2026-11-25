@@ -278,8 +278,19 @@ class ActivityBar(ctk.CTkFrame):
         self._build()
 
     def _build(self):
-        # Clean top breathing room (no duplicate logo in Activity Bar)
-        ctk.CTkFrame(self, height=10, fg_color="transparent").pack()
+        # Top: official AirDude brand mark (Antigravity style)
+        logo_frame = ctk.CTkFrame(self, fg_color="transparent", width=48, height=48)
+        logo_frame.pack(fill="x")
+        logo_frame.pack_propagate(False)
+        logo_img = get_brand_image("logo_64.png", (26, 26))
+        if logo_img:
+            self._actbar_logo_ref = logo_img
+            if not _brand_label(logo_frame, logo_img, 26, 26, expand=True, pady=(10, 4)):
+                ctk.CTkFrame(logo_frame, height=10, fg_color="transparent").pack()
+        else:
+            ctk.CTkFrame(logo_frame, height=10, fg_color="transparent").pack()
+
+        _divider(self, padx=8, pady=(0, 6))
 
         for key, icon, tooltip in self.ITEMS:
             frame = ctk.CTkFrame(self, fg_color="transparent", width=48, height=44)
@@ -427,9 +438,9 @@ class SidebarPanel(ctk.CTkFrame):
             n_fail = sum(1 for c in cards.values() if getattr(c, "status", "") in ("failed", "declined"))
 
             stats = [
-                ("Active", str(n_active), C_ACCENT),
-                ("Completed", str(n_done), C_SUCCESS),
-                ("Failed", str(n_fail), C_ERROR if n_fail else C_TEXT_SUB),
+                ("Active", str(n_active), C_TEXT_SUB),
+                ("Completed", str(n_done), C_TEXT_SUB),
+                ("Failed", str(n_fail), C_TEXT_SUB),
             ]
             for label, count_val, col in stats:
                 SidebarListItem(self.body_frame, label, right_text=count_val, right_color=col).pack(fill="x")
@@ -2765,6 +2776,12 @@ class AirDudeApp(ctk.CTk):
         self.configure(fg_color=C_BG)
 
         # Set official brand icon for window titlebar + Windows taskbar
+        if sys.platform == "win32":
+            try:
+                import ctypes
+                ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("AirDude.Desktop.1.0")
+            except Exception:
+                pass
         ico_path = get_asset_path(os.path.join("branding", "app_icon.ico"))
         if os.path.isfile(ico_path):
             try:
