@@ -1,4 +1,4 @@
-# AirDude — VS Code Inspired Local File Transfer App
+# AirDude - VS Code Inspired Local File Transfer App
 
 > High-performance, AirDrop-style LAN file sharing for Windows, macOS, and Linux built with **Python + CustomTkinter**.
 > Professional desktop interface inspired by **Visual Studio Code**. No internet required. No accounts. No cloud uploads.
@@ -9,7 +9,7 @@
 
 The user interface follows a modern 3-column VS Code layout:
 
-1. **Activity Bar (Far Left — 48px)**:
+1. **Activity Bar (Far Left, 48px)**:
    - `⬡` **Nearby Devices** (Primary explorer)
    - `⇄` **Transfers** (Live transfer manager with Incoming, Outgoing, and Completed views)
    - `☰` **History** (Persistent logs with SHA-256 verification badges)
@@ -61,7 +61,7 @@ python verify_suite.py
 
 | File | Purpose |
 |------|---------|
-| `app_ui.py` | Complete VS Code-inspired UI — Activity Bar, Sidebar, Workspace, Modals |
+| `app_ui.py` | Complete VS Code-inspired UI: Activity Bar, Sidebar, Workspace, Modals |
 | `network.py` | UDP discovery + 64KB chunked TCP streaming engine + SHA-256 validation |
 | `utils.py` | File hashing, formatters, JSON settings/history persistence, Win32 drag-drop |
 | `verify_suite.py` | Automated unit & integration verification test suite |
@@ -96,7 +96,7 @@ python verify_suite.py
 - **100ms Fast Event Polling**: Queue polling rate updated from 1000ms to 100ms for smooth 10 FPS live updates.
 - **Native Explorer Drag & Drop**: Drag files directly from Windows Explorer into the app window (built using pure Python `ctypes`).
 - **Complete Settings Page**:
-  - **Editable Device Name**: Change device name live with "Save Name" button — immediately broadcasts to peers.
+  - **Editable Device Name**: Change device name live with "Save" button, immediately broadcasting to peers.
   - **Theme Selection**: Switch between "System", "Light", and "Dark" modes on the fly.
   - **Default Save Directory**: Browse and select custom download folder.
   - **Port Information**: Displays active network ports.
