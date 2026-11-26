@@ -97,6 +97,10 @@ def _brand_label(parent, img, width, height, **pack_kw):
     except Exception:
         return None
 
+def _peer_uuid(info: dict) -> str:
+    """Return canonical stable UUID key for a discovered peer dict."""
+    return str(info.get("device_id") or info.get("device_key") or f"{info.get('ip')}:{info.get('tcp_port')}")
+
 
 # ==========================================
 # Reusable Flat VS Code List Components
@@ -363,11 +367,21 @@ class SidebarPanel(ctk.CTkFrame):
         self.app_ref = master
         self._content_frame = None
         self._current_section = ""
+        self._device_items: Dict[str, dict] = {}
+        self._devices_scroll = None
+        self._devices_count_lbl = None
+        self._devices_empty_lbl = None
+        self._devices_count_text = ""
         ctk.CTkFrame(self, height=10, fg_color="transparent").pack()
 
     def set_section(self, section_key: str, title: str):
         """Update sidebar content for the active section."""
         self._current_section = section_key
+        self._device_items.clear()
+        self._devices_scroll = None
+        self._devices_count_lbl = None
+        self._devices_empty_lbl = None
+        self._devices_count_text = ""
         if self._content_frame:
             self._content_frame.destroy()
 
@@ -382,56 +396,126 @@ class SidebarPanel(ctk.CTkFrame):
         self.body_frame = ctk.CTkFrame(self._content_frame, fg_color="transparent")
         self.body_frame.pack(fill="both", expand=True)
 
-        self.refresh()
+        if section_key == "devices":
+            self._build_devices_section()
+        else:
+            self.refresh()
+
+    def _build_devices_section(self):
+        sub_hdr = ctk.CTkFrame(self.body_frame, fg_color="transparent")
+        sub_hdr.pack(fill="x", padx=12, pady=(0, 6))
+        self._devices_count_lbl = _label(sub_hdr, "DISCOVERED (0)", 10, "bold", C_TEXT_SUB)
+        self._devices_count_lbl.pack(side="left")
+        self._devices_count_text = "DISCOVERED (0)"
+
+        self._devices_scroll = ctk.CTkScrollableFrame(self.body_frame, fg_color="transparent", corner_radius=0)
+        self._devices_scroll.pack(fill="both", expand=True, padx=4)
+
+        self._devices_empty_lbl = _label(
+            self._devices_scroll,
+            "Scanning LAN...\nMake sure other PCs are open.",
+            10,
+            color=C_TEXT_SUB,
+        )
+
+        # Quick action at bottom
+        bot = ctk.CTkFrame(self.body_frame, fg_color=C_HOVER, corner_radius=4)
+        bot.pack(fill="x", padx=10, pady=10)
+        _btn(bot, "+ Send Files", command=lambda: self.app_ref.navigate_to("send"),
+             height=26, fg=C_ACCENT, hover=C_ACCENT_DIM, text_color="#FFFFFF", bw=0, font_size=11).pack(fill="x", padx=6, pady=6)
+
+        devices = self.app_ref.active_devices if self.app_ref else {}
+        self.sync_devices(devices)
+
+    def sync_devices(self, devices: Dict[str, dict]):
+        """Diff-based update of DISCOVERED PEERS in sidebar without destroying unchanged rows."""
+        if self._current_section != "devices" or not self._devices_scroll or not self._devices_scroll.winfo_exists():
+            return
+
+        current_keys = set(devices.keys())
+        existing_keys = set(self._device_items.keys())
+
+        # 1. Remove offline peers
+        for key in (existing_keys - current_keys):
+            entry = self._device_items.pop(key)
+            try:
+                entry["frame"].destroy()
+            except Exception:
+                pass
+
+        # 2. Add new peers & 3. Update existing peers in place
+        for key, dev in devices.items():
+            hostname = dev.get("hostname", "Peer")
+            ip_str = dev.get("ip", "")
+            if key in self._device_items:
+                entry = self._device_items[key]
+                if entry["hostname"] != hostname:
+                    entry["name_lbl"].configure(text=hostname)
+                    entry["hostname"] = hostname
+                if entry["ip"] != ip_str:
+                    entry["ip_lbl"].configure(text=ip_str)
+                    entry["ip"] = ip_str
+                entry["dev"] = dev
+            else:
+                item = ctk.CTkFrame(self._devices_scroll, fg_color="transparent", corner_radius=4)
+                item.pack(fill="x", pady=1)
+
+                inner = ctk.CTkFrame(item, fg_color="transparent")
+                inner.pack(fill="x", padx=6, pady=4)
+
+                _label(inner, "⬡", 10, color=C_ACCENT).pack(side="left", padx=(0, 6))
+
+                name_box = ctk.CTkFrame(inner, fg_color="transparent")
+                name_box.pack(side="left", fill="x", expand=True)
+                name_lbl = _label(name_box, hostname, 11, "bold")
+                name_lbl.pack(anchor="w")
+                ip_lbl = _label(name_box, ip_str, 9, color=C_TEXT_SUB)
+                ip_lbl.pack(anchor="w")
+
+                entry = {
+                    "frame": item,
+                    "name_lbl": name_lbl,
+                    "ip_lbl": ip_lbl,
+                    "hostname": hostname,
+                    "ip": ip_str,
+                    "dev": dev,
+                }
+                _btn(
+                    inner, "↗",
+                    command=lambda k=key: self.app_ref.navigate_to("send", target_device=self._device_items.get(k, {}).get("dev")),
+                    width=24, height=22, fg=C_CARD, hover=C_ACCENT, text_color="#FFFFFF", font_size=10,
+                ).pack(side="right")
+
+                self._device_items[key] = entry
+
+        count_text = f"DISCOVERED ({len(self._device_items)})"
+        if count_text != self._devices_count_text and self._devices_count_lbl:
+            self._devices_count_lbl.configure(text=count_text)
+            self._devices_count_text = count_text
+
+        if self._devices_empty_lbl:
+            if len(self._device_items) == 0:
+                if not self._devices_empty_lbl.winfo_manager():
+                    self._devices_empty_lbl.pack(anchor="w", padx=8, pady=8)
+            else:
+                if self._devices_empty_lbl.winfo_manager():
+                    self._devices_empty_lbl.pack_forget()
 
     def refresh(self):
         """Refreshes sidebar dynamic content based on the active section."""
         if not hasattr(self, "body_frame") or not self.body_frame.winfo_exists():
             return
 
+        sec = self._current_section
+        if sec == "devices":
+            devices = self.app_ref.active_devices if self.app_ref else {}
+            self.sync_devices(devices)
+            return
+
         for w in self.body_frame.winfo_children():
             w.destroy()
 
-        sec = self._current_section
-
-        if sec == "devices":
-            devices = self.app_ref.active_devices if self.app_ref else {}
-            count = len(devices)
-            
-            sub_hdr = ctk.CTkFrame(self.body_frame, fg_color="transparent")
-            sub_hdr.pack(fill="x", padx=12, pady=(0, 6))
-            _label(sub_hdr, f"DISCOVERED ({count})", 10, "bold", C_TEXT_SUB).pack(side="left")
-
-            scroll = ctk.CTkScrollableFrame(self.body_frame, fg_color="transparent", corner_radius=0)
-            scroll.pack(fill="both", expand=True, padx=4)
-
-            if not devices:
-                _label(scroll, "Scanning LAN...\nMake sure other PCs are open.", 10, color=C_TEXT_SUB).pack(anchor="w", padx=8, pady=8)
-            else:
-                for key, dev in devices.items():
-                    item = ctk.CTkFrame(scroll, fg_color="transparent", corner_radius=4)
-                    item.pack(fill="x", pady=1)
-
-                    inner = ctk.CTkFrame(item, fg_color="transparent")
-                    inner.pack(fill="x", padx=6, pady=4)
-
-                    _label(inner, "⬡", 10, color=C_ACCENT).pack(side="left", padx=(0, 6))
-                    
-                    name_box = ctk.CTkFrame(inner, fg_color="transparent")
-                    name_box.pack(side="left", fill="x", expand=True)
-                    _label(name_box, dev.get("hostname", "Peer"), 11, "bold").pack(anchor="w")
-                    _label(name_box, dev.get("ip", ""), 9, color=C_TEXT_SUB).pack(anchor="w")
-
-                    _btn(inner, "↗", command=lambda d=dev: self.app_ref.navigate_to("send", target_device=d),
-                         width=24, height=22, fg=C_CARD, hover=C_ACCENT, text_color="#FFFFFF", font_size=10).pack(side="right")
-
-            # Quick action at bottom
-            bot = ctk.CTkFrame(self.body_frame, fg_color=C_HOVER, corner_radius=4)
-            bot.pack(fill="x", padx=10, pady=10)
-            _btn(bot, "+ Send Files", command=lambda: self.app_ref.navigate_to("send"),
-                 height=26, fg=C_ACCENT, hover=C_ACCENT_DIM, text_color="#FFFFFF", bw=0, font_size=11).pack(fill="x", padx=6, pady=6)
-
-        elif sec == "transfers":
+        if sec == "transfers":
             cards = getattr(self.app_ref.current_page, "transfer_cards", {}) if isinstance(getattr(self.app_ref, "current_page", None), TransfersPage) else {}
             n_active = sum(1 for c in cards.values() if getattr(c, "status", "") in ("in_progress", "paused", "waiting"))
             n_done = sum(1 for c in cards.values() if getattr(c, "status", "") == "completed")
@@ -581,11 +665,14 @@ class DeviceRow(ctk.CTkFrame):
         info.pack(side="left", fill="x", expand=True, pady=7)
 
         hostname = self.device_info.get("hostname", "Unknown")
-        _label(info, hostname, 12, "normal").pack(anchor="w")
+        self.hostname_lbl = _label(info, hostname, 12, "normal")
+        self.hostname_lbl.pack(anchor="w")
 
         os_str = self.device_info.get("os", "Unknown")
         ip_str = self.device_info.get("ip", "")
-        _label(info, f"{os_str}  ·  {ip_str}", 10, color=C_TEXT_SUB).pack(anchor="w")
+        self.meta_lbl = _label(info, f"{os_str}  ·  {ip_str}", 10, color=C_TEXT_SUB)
+        self.meta_lbl.pack(anchor="w")
+        self._displayed = (hostname, os_str, ip_str)
 
         # Right: status dot + send button (hidden by default)
         right = ctk.CTkFrame(self.inner, fg_color="transparent")
@@ -631,6 +718,19 @@ class DeviceRow(ctk.CTkFrame):
     def _on_send(self):
         if self.on_send:
             self.on_send(self.device_info)
+
+    def update_info(self, info: dict):
+        self.device_info = info
+        hostname = info.get("hostname", "Unknown")
+        os_str = info.get("os", "Unknown")
+        ip_str = info.get("ip", "")
+        new_disp = (hostname, os_str, ip_str)
+        if new_disp != self._displayed:
+            if new_disp[0] != self._displayed[0]:
+                self.hostname_lbl.configure(text=hostname)
+            if new_disp[1:] != self._displayed[1:]:
+                self.meta_lbl.configure(text=f"{os_str}  ·  {ip_str}")
+            self._displayed = new_disp
 
     def update_last_seen(self, ts: float):
         pass  # Could show last seen delta if desired
@@ -743,7 +843,7 @@ class DevicesPage(ctk.CTkFrame):
 
         for key, info in active_devices.items():
             if key in self.device_rows:
-                self.device_rows[key].update_last_seen(info.get("last_seen", time.time()))
+                self.device_rows[key].update_info(info)
             else:
                 row = DeviceRow(
                     self.scroll,
@@ -754,12 +854,17 @@ class DevicesPage(ctk.CTkFrame):
                 self.device_rows[key] = row
 
         count = len(self.device_rows)
-        self.count_lbl.configure(text=f"{count} {'device' if count == 1 else 'devices'}")
+        count_txt = f"{count} {'device' if count == 1 else 'devices'}"
+        if getattr(self, "_last_count_txt", None) != count_txt:
+            self.count_lbl.configure(text=count_txt)
+            self._last_count_txt = count_txt
 
         if count > 0:
-            self.empty_frame.pack_forget()
+            if self.empty_frame.winfo_manager():
+                self.empty_frame.pack_forget()
         else:
-            self.empty_frame.pack(fill="both", expand=True, pady=80)
+            if not self.empty_frame.winfo_manager():
+                self.empty_frame.pack(fill="both", expand=True, pady=80)
 
 
 # ==========================================
@@ -770,11 +875,27 @@ class SendFilesPage(ctk.CTkFrame):
     """3-step send flow: Select Device → Select Files → Send."""
 
     def __init__(self, master, network: AirDudeNetwork, active_devices: Dict[str, dict],
-                 target_device: Optional[dict] = None, **kw):
+                 target_device: Optional[dict] = None, app_ref=None, **kw):
         super().__init__(master, fg_color=C_BG, corner_radius=0, **kw)
         self.network = network
+        self.app_ref = app_ref
         self.active_devices = active_devices
-        self.selected_device = target_device or (next(iter(active_devices.values())) if active_devices else None)
+        self._device_cards: Dict[str, dict] = {}
+        self._empty_devices_lbl = None
+        self._last_review_peer = None
+
+        if target_device is not None:
+            self.selected_peer_uuid = _peer_uuid(target_device)
+        elif app_ref is not None and getattr(app_ref, "selected_peer_uuid", None) in active_devices:
+            self.selected_peer_uuid = app_ref.selected_peer_uuid
+        elif active_devices:
+            self.selected_peer_uuid = next(iter(active_devices.keys()))
+        else:
+            self.selected_peer_uuid = None
+
+        if self.app_ref is not None:
+            self.app_ref.selected_peer_uuid = self.selected_peer_uuid
+
         self.selected_files: List[str] = []
         self._wait_after_id = None
         self._wait_remaining = 30
@@ -787,6 +908,12 @@ class SendFilesPage(ctk.CTkFrame):
             self.after(300, lambda: enable_drag_and_drop(self.winfo_toplevel(), self._on_drop))
         except Exception:
             pass
+
+    @property
+    def selected_device(self) -> Optional[dict]:
+        if self.selected_peer_uuid:
+            return self.active_devices.get(self.selected_peer_uuid)
+        return None
 
     def destroy(self):
         self._cancel_wait_timer()
@@ -801,17 +928,7 @@ class SendFilesPage(ctk.CTkFrame):
 
     def sync_devices(self, devices: dict):
         self.active_devices = devices
-        if self.selected_device:
-            match = None
-            for d in devices.values():
-                if d.get("ip") == self.selected_device.get("ip") and d.get("tcp_port") == self.selected_device.get("tcp_port"):
-                    match = d
-                    break
-            self.selected_device = match
-        elif devices:
-            self.selected_device = next(iter(devices.values()))
         self._render_device_selector()
-        self._refresh_review()
 
     def _build(self):
         # Header
@@ -853,46 +970,143 @@ class SendFilesPage(ctk.CTkFrame):
         self._build_review_panel(right)
 
     def _render_device_selector(self):
-        for w in self.devices_frame.winfo_children():
-            w.destroy()
+        current_keys = set(self.active_devices.keys())
+        existing_keys = set(self._device_cards.keys())
+        review_needs_update = False
 
+        # 1. Remove offline peers
+        for key in (existing_keys - current_keys):
+            entry = self._device_cards.pop(key)
+            try:
+                entry["card"].destroy()
+            except Exception:
+                pass
+            if self.selected_peer_uuid == key:
+                self.selected_peer_uuid = None
+                if self.app_ref is not None:
+                    self.app_ref.selected_peer_uuid = None
+                review_needs_update = True
+
+        # Empty state label management
         if not self.active_devices:
-            _label(self.devices_frame,
-                   "No devices found. Keep AirDude open on other PCs.",
-                   11, color=C_TEXT_SUB).pack(anchor="w", pady=4)
+            if self._empty_devices_lbl is None or not self._empty_devices_lbl.winfo_exists():
+                self._empty_devices_lbl = _label(
+                    self.devices_frame,
+                    "No devices found. Keep AirDude open on other PCs.",
+                    11,
+                    color=C_TEXT_SUB,
+                )
+                self._empty_devices_lbl.pack(anchor="w", pady=4)
+            if review_needs_update:
+                self._update_review_peer()
             return
+        elif self._empty_devices_lbl is not None:
+            try:
+                self._empty_devices_lbl.destroy()
+            except Exception:
+                pass
+            self._empty_devices_lbl = None
 
+        # Auto-select first peer only if nothing is currently selected
+        if self.selected_peer_uuid is None or self.selected_peer_uuid not in self.active_devices:
+            self.selected_peer_uuid = next(iter(self.active_devices.keys()))
+            if self.app_ref is not None:
+                self.app_ref.selected_peer_uuid = self.selected_peer_uuid
+            review_needs_update = True
+
+        # 2. Add new peers & 3. Update existing peers in place
         for key, dev in self.active_devices.items():
-            is_sel = (self.selected_device is not None and
-                      self.selected_device.get("ip") == dev.get("ip") and
-                      self.selected_device.get("tcp_port") == dev.get("tcp_port"))
+            is_sel = (self.selected_peer_uuid == key)
+            hostname = dev.get("hostname", "Peer")
+            os_str = dev.get("os", "")
+            addr_str = f"{dev.get('ip')}:{dev.get('tcp_port')}"
 
-            border_col = C_ACCENT if is_sel else C_BORDER
-            bg_col = C_HOVER if is_sel else C_CARD
+            if key in self._device_cards:
+                entry = self._device_cards[key]
+                title_text = ("✓ " if is_sel else "") + hostname
+                if entry["title_text"] != title_text:
+                    entry["title_lbl"].configure(text=title_text)
+                    entry["title_text"] = title_text
+                if entry["os_str"] != os_str:
+                    entry["os_lbl"].configure(text=os_str)
+                    entry["os_str"] = os_str
+                if entry["addr_str"] != addr_str:
+                    entry["ip_lbl"].configure(text=addr_str)
+                    entry["addr_str"] = addr_str
+                if entry["is_sel"] != is_sel:
+                    entry["card"].configure(
+                        fg_color=C_HOVER if is_sel else C_CARD,
+                        border_color=C_ACCENT if is_sel else C_BORDER,
+                    )
+                    entry["is_sel"] = is_sel
+                if is_sel and (entry["hostname"] != hostname or entry["addr_str"] != addr_str):
+                    review_needs_update = True
+                entry["hostname"] = hostname
+                entry["dev"] = dev
+            else:
+                border_col = C_ACCENT if is_sel else C_BORDER
+                bg_col = C_HOVER if is_sel else C_CARD
 
-            card = ctk.CTkFrame(self.devices_frame, fg_color=bg_col, border_width=1,
-                                border_color=border_col, corner_radius=4, cursor="hand2")
-            card.pack(side="left", padx=(0, 10), pady=2)
+                card = ctk.CTkFrame(
+                    self.devices_frame, fg_color=bg_col, border_width=1,
+                    border_color=border_col, corner_radius=4, cursor="hand2",
+                )
+                card.pack(side="left", padx=(0, 10), pady=2)
 
-            inner = ctk.CTkFrame(card, fg_color="transparent")
-            inner.pack(padx=14, pady=10)
+                inner = ctk.CTkFrame(card, fg_color="transparent")
+                inner.pack(padx=14, pady=10)
 
-            top = ctk.CTkFrame(inner, fg_color="transparent")
-            top.pack(fill="x")
+                top = ctk.CTkFrame(inner, fg_color="transparent")
+                top.pack(fill="x")
 
-            check = "✓ " if is_sel else ""
-            _label(top, check + dev.get("hostname", "Peer"), 12, "bold").pack(side="left")
-            _label(top, dev.get("os", ""), 10, color=C_TEXT_SUB).pack(side="left", padx=(8, 0))
+                title_text = ("✓ " if is_sel else "") + hostname
+                title_lbl = _label(top, title_text, 12, "bold")
+                title_lbl.pack(side="left")
+                os_lbl = _label(top, os_str, 10, color=C_TEXT_SUB)
+                os_lbl.pack(side="left", padx=(8, 0))
 
-            _label(inner, f"{dev.get('ip')}:{dev.get('tcp_port')}", 10, color=C_TEXT_SUB).pack(anchor="w", pady=(4, 0))
+                ip_lbl = _label(inner, addr_str, 10, color=C_TEXT_SUB)
+                ip_lbl.pack(anchor="w", pady=(4, 0))
 
-            for widget in [card, inner, top]:
-                widget.bind("<Button-1>", lambda e, d=dev: self._select_device(d))
+                self._device_cards[key] = {
+                    "card": card,
+                    "title_lbl": title_lbl,
+                    "os_lbl": os_lbl,
+                    "ip_lbl": ip_lbl,
+                    "title_text": title_text,
+                    "hostname": hostname,
+                    "os_str": os_str,
+                    "addr_str": addr_str,
+                    "is_sel": is_sel,
+                    "dev": dev,
+                }
 
-    def _select_device(self, dev: dict):
-        self.selected_device = dev
-        self._render_device_selector()
-        self._refresh_review()
+                for widget in [card, inner, top, title_lbl, os_lbl, ip_lbl]:
+                    widget.bind("<Button-1>", lambda e, k=key: self._select_device(k))
+
+        if review_needs_update:
+            self._update_review_peer()
+
+    def _select_device(self, peer_uuid: str):
+        if self.selected_peer_uuid == peer_uuid:
+            return
+        self.selected_peer_uuid = peer_uuid
+        if self.app_ref is not None:
+            self.app_ref.selected_peer_uuid = peer_uuid
+
+        for key, entry in self._device_cards.items():
+            is_sel = (key == peer_uuid)
+            if entry["is_sel"] != is_sel:
+                title_text = ("✓ " if is_sel else "") + entry["hostname"]
+                entry["title_lbl"].configure(text=title_text)
+                entry["title_text"] = title_text
+                entry["card"].configure(
+                    fg_color=C_HOVER if is_sel else C_CARD,
+                    border_color=C_ACCENT if is_sel else C_BORDER,
+                )
+                entry["is_sel"] = is_sel
+
+        self._update_review_peer()
 
     def _build_file_picker(self, parent):
         _label(parent, "Select Files", 12, "bold", "#E2E2E2").pack(anchor="w")
@@ -1030,14 +1244,26 @@ class SendFilesPage(ctk.CTkFrame):
         self._refresh_file_list()
         self._refresh_review()
 
-    def _refresh_review(self):
-        if self.selected_device:
-            self.review_target_lbl.configure(text=self.selected_device.get("hostname", "Peer"))
-            self.review_ip_lbl.configure(
-                text=f"{self.selected_device.get('ip')}:{self.selected_device.get('tcp_port')}")
+    def _update_review_peer(self):
+        if not hasattr(self, "review_target_lbl"):
+            return
+        dev = self.selected_device
+        if dev:
+            peer_state = (dev.get("hostname", "Peer"), f"{dev.get('ip')}:{dev.get('tcp_port')}")
         else:
-            self.review_target_lbl.configure(text="No device selected")
-            self.review_ip_lbl.configure(text="-")
+            peer_state = ("No device selected", "-")
+
+        if peer_state != self._last_review_peer:
+            self.review_target_lbl.configure(text=peer_state[0])
+            self.review_ip_lbl.configure(text=peer_state[1])
+            self._last_review_peer = peer_state
+
+        can_send = bool(dev and self.selected_files)
+        self.send_btn.configure(state="normal" if can_send else "disabled",
+                                fg_color=C_ACCENT if can_send else C_BORDER)
+
+    def _refresh_review(self):
+        self._update_review_peer()
 
         n = len(self.selected_files)
         total = sum(os.path.getsize(f) for f in self.selected_files if os.path.isfile(f))
@@ -2799,6 +3025,7 @@ class AirDudeApp(ctk.CTk):
 
         # State
         self.active_devices: Dict[str, dict] = {}
+        self.selected_peer_uuid: Optional[str] = None
         self.history_records: List[dict] = load_history()
         self.recent_transfers: List[dict] = list(self.history_records[:20])
         self._pending_events: List[dict] = []
@@ -2937,6 +3164,7 @@ class AirDudeApp(ctk.CTk):
                 network=self.network,
                 active_devices=self.active_devices,
                 target_device=target_device,
+                app_ref=self,
             )
 
         elif route == "transfers":
@@ -3089,9 +3317,21 @@ class AirDudeApp(ctk.CTk):
                         continue
                     if info.get("device_id") == self.network.device_id:
                         continue
-                    key = info.get("device_key") or info.get("device_id") or f"{info.get('ip')}:{info.get('tcp_port')}"
+                    key = _peer_uuid(info)
+                    prev = self.active_devices.get(key)
+                    if prev is None or (
+                        prev.get("hostname"),
+                        prev.get("os"),
+                        prev.get("ip"),
+                        prev.get("tcp_port"),
+                    ) != (
+                        info.get("hostname"),
+                        info.get("os"),
+                        info.get("ip"),
+                        info.get("tcp_port"),
+                    ):
+                        updated = True
                     self.active_devices[key] = info
-                    updated = True
                 except queue.Empty:
                     break
 
@@ -3172,10 +3412,12 @@ class AirDudeApp(ctk.CTk):
             offline = [k for k, d in self.active_devices.items() if now - d.get("last_seen", 0) > 10.0]
             for k in offline:
                 self.active_devices.pop(k, None)
+                if self.selected_peer_uuid == k:
+                    self.selected_peer_uuid = None
                 updated = True
 
             # Sync active page
-            if isinstance(self.current_page, DevicesPage):
+            if isinstance(self.current_page, DevicesPage) and updated:
                 self.current_page.sync_devices(self.active_devices)
             elif isinstance(self.current_page, SendFilesPage) and updated:
                 self.current_page.sync_devices(self.active_devices)
